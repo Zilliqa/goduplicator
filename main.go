@@ -312,7 +312,7 @@ func main() {
 	var lock2 sync.RWMutex
 	mirrorWake := make(map[string]time.Time)
 	// No need to lock here since no one access them at this point.
-	newMirrorAddresses = mirrorAddresses
+	copy(newMirrorAddresses, mirrorAddresses)
 
 	// routine that gets the latest updates of mirror address every 10 sec
 	// We always replace all existing addresses with new ones read.
@@ -330,7 +330,6 @@ func main() {
 				lock2.Lock()
 				newMirrorAddresses = strings.Split(string(contents),"\n")
 				lock2.Unlock()
-				
 			}
 			time.Sleep(10*time.Second)
 		}
@@ -352,9 +351,9 @@ func main() {
 			}
 
 			var mirrors []mirror
-			var localMirrorAddresses mirrorList
 			lock2.Lock()
-			localMirrorAddresses = newMirrorAddresses		
+			var localMirrorAddresses mirrorList 
+			localMirrorAddresses = newMirrorAddresses[1:] // ignore first one since it is forwarder ip
 			lock2.Unlock()
 
 			for _, addr := range localMirrorAddresses {
