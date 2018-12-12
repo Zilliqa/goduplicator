@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"net/http"
 
 	"golang.org/x/sys/unix"
 )
@@ -273,8 +274,10 @@ func main() {
 		listenAddress    string
 		forwardAddress   string
 		mirrorAddresses  mirrorList
+		newMirrorAddresses mirrorList
 		useZeroCopy      bool
 		mirrorCloseDelay time.Duration
+		seedurl          string
 	)
 
 	flag.BoolVar(&useZeroCopy, "z", false, "use zero copy")
@@ -285,21 +288,53 @@ func main() {
 	flag.DurationVar(&delay, "d", 20*time.Second, "delay connecting to mirror after unsuccessful attempt")
 	flag.DurationVar(&writeTimeout, "wt", 20*time.Millisecond, "mirror write timeout")
 	flag.DurationVar(&mirrorCloseDelay, "mt", 0, "mirror conn close delay")
+	flag.StringVar(&seedurl, "s", "", "seed url to check level2lookupips")
 
 	flag.Parse()
 	if listenAddress == "" || forwardAddress == "" {
 		flag.Usage()
 		return
 	}
-
+    
 	l, err := net.Listen("tcp", listenAddress)
 	if err != nil {
 		log.Fatalf("error while listening: %s", err)
 	}
 
+	fmt.Println(seedurl)
+	if seedurl == "" {
+		flag.Usage()
+		return
+	}
+
 	connNo := uint64(1)
 	var lock sync.RWMutex
+	var lock2 sync.RWMutex
 	mirrorWake := make(map[string]time.Time)
+	// No need to lock here since no one access them at this point.
+	copy(newMirrorAddresses, mirrorAddresses)
+
+	// routine that gets the latest updates of mirror address every 10 sec
+	// We always replace all existing addresses with new ones read.
+	go func() {
+		for {
+			response, err := http.Get(seedurl)
+			if err != nil {
+				log.Fatal(err)
+			} else {
+				defer response.Body.Close()
+				contents, err := ioutil.ReadAll(response.Body)
+				if err != nil {
+						log.Fatal(err)
+				}
+				lock2.Lock()
+				newMirrorAddresses = strings.Split(string(contents),"\n")
+				lock2.Unlock()
+			}
+			time.Sleep(10*time.Second)
+		}
+	}()
+
 	for {
 		c, err := l.Accept()
 		if err != nil {
@@ -316,8 +351,12 @@ func main() {
 			}
 
 			var mirrors []mirror
+			lock2.Lock()
+			var localMirrorAddresses mirrorList 
+			localMirrorAddresses = newMirrorAddresses[1:] // ignore first one since it is forwarder ip
+			lock2.Unlock()
 
-			for _, addr := range mirrorAddresses {
+			for _, addr := range localMirrorAddresses {
 				lock.RLock()
 				wake := mirrorWake[addr]
 				lock.RUnlock()
