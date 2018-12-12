@@ -274,7 +274,7 @@ func main() {
 		listenAddress    string
 		forwardAddress   string
 		mirrorAddresses  mirrorList
-		newmirrorAddresses mirrorList
+		newMirrorAddresses mirrorList
 		useZeroCopy      bool
 		mirrorCloseDelay time.Duration
 		seedurl          string
@@ -312,7 +312,7 @@ func main() {
 	var lock2 sync.RWMutex
 	mirrorWake := make(map[string]time.Time)
 	// No need to lock here since no one access them at this point.
-	newmirrorAddresses = mirrorAddresses
+	newMirrorAddresses = mirrorAddresses
 
 	// routine that gets the latest updates of mirror address every 10 sec
 	// We always replace all existing addresses with new ones read.
@@ -328,12 +328,7 @@ func main() {
 						log.Fatal(err)
 				}
 				lock2.Lock()
-				fmt.Println("Hello again")
-				newmirrorAddresses = strings.Split(string(contents),"\n")
-
-				for _, addr := range newmirrorAddresses {
-					fmt.Println(addr)
-				}	
+				newMirrorAddresses = strings.Split(string(contents),"\n")
 				lock2.Unlock()
 				
 			}
@@ -359,7 +354,7 @@ func main() {
 			var mirrors []mirror
 			var localMirrorAddresses mirrorList
 			lock2.Lock()
-			localMirrorAddresses = newmirrorAddresses		
+			localMirrorAddresses = newMirrorAddresses		
 			lock2.Unlock()
 
 			for _, addr := range localMirrorAddresses {
