@@ -320,7 +320,7 @@ func main() {
 		for {
 			response, err := http.Get(seedurl)
 			if err != nil {
-				log.Fatal(err)
+				log.Printf("error while connecting to seedurl: %s", seedurl)
 			} else {
 				defer response.Body.Close()
 				contents, err := ioutil.ReadAll(response.Body)
@@ -328,7 +328,8 @@ func main() {
 						log.Fatal(err)
 				}
 				lock2.Lock()
-				newMirrorAddresses = strings.Split(string(contents),"\n")
+				s := strings.Replace(string(contents),"\n",":30303\n",-1)
+				newMirrorAddresses = strings.Split(s,"\n")
 				lock2.Unlock()
 			}
 			time.Sleep(10*time.Second)
