@@ -166,17 +166,21 @@ func main() {
 				log.Printf("error while connecting to seedurl: %s", seedurl)
 			} else {
 				defer response.Body.Close()
-				contents, err := ioutil.ReadAll(response.Body)
-				if err != nil {
-						log.Fatal(err)
+				if response.StatusCode == 200 {
+					contents, err := ioutil.ReadAll(response.Body)
+					if err != nil {
+							log.Fatal(err)
+					}
+					lock2.Lock()
+					s := strings.Replace(string(contents),"\n",":30303\n",-1)
+					newMirrorAddresses = nil
+					newMirrorAddresses = strings.Split(s,"\n")
+					lock2.Unlock()
+				} else {
+					log.Printf("May be seedurl: %s is not available at the moment", seedurl)
 				}
-				lock2.Lock()
-				s := strings.Replace(string(contents),"\n",":30303\n",-1)
-				newMirrorAddresses = nil
-				newMirrorAddresses = strings.Split(s,"\n")
-				lock2.Unlock()
 			}
-			time.Sleep(10*time.Second)
+			time.Sleep(5*time.Second)
 		}
 	}()
 
