@@ -172,9 +172,9 @@ func main() {
 							log.Fatal(err)
 					}
 					lock2.Lock()
-					s := strings.Replace(string(contents),"\n",":30303\n",-1)
+					//s := strings.Replace(string(contents),"\n",":30303\n",-1)
 					newMirrorAddresses = nil
-					newMirrorAddresses = strings.Split(s,"\n")
+					newMirrorAddresses = strings.Split(string(contents),"\n")
 					lock2.Unlock()
 				} else {
 					log.Printf("May be seedurl: %s is not available at the moment", seedurl)
