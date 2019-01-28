@@ -115,9 +115,7 @@ func main() {
 		connectTimeout   time.Duration
 		delay            time.Duration
 		listenAddress    string
-		forwardAddress   string
-		mirrorAddresses  mirrorList
-		newMirrorAddresses mirrorList
+		mirrorAddresses mirrorList
 		useZeroCopy      bool
 		mirrorCloseDelay time.Duration
 		seedurl          string
@@ -125,8 +123,6 @@ func main() {
 
 	flag.BoolVar(&useZeroCopy, "z", false, "use zero copy")
 	flag.StringVar(&listenAddress, "l", "", "listen address (e.g. 'localhost:8080')")
-	flag.StringVar(&forwardAddress, "f", "", "forward to address (e.g. 'localhost:8081')")
-	flag.Var(&mirrorAddresses, "m", "comma separated list of mirror addresses (e.g. 'localhost:8082,localhost:8083')")
 	flag.DurationVar(&connectTimeout, "t", 500*time.Millisecond, "mirror connect timeout")
 	flag.DurationVar(&delay, "d", 1*time.Second, "delay connecting to mirror after unsuccessful attempt")
 	flag.DurationVar(&writeTimeout, "wt", 20*time.Millisecond, "mirror write timeout")
@@ -134,7 +130,7 @@ func main() {
 	flag.StringVar(&seedurl, "s", "", "seed url to check level2lookupips")
 
 	flag.Parse()
-	if listenAddress == "" || forwardAddress == "" {
+	if listenAddress == "" {
 		flag.Usage()
 		return
 	}
@@ -154,8 +150,6 @@ func main() {
 	var lock2 sync.RWMutex
 	mirrorWake := make(map[string]time.Time)
 	hashStore = NewSet()
-	// No need to lock here since no one access them at this point.
-	newMirrorAddresses = append(newMirrorAddresses, mirrorAddresses...)
 
 	// routine that gets the latest updates of mirror address every 10 sec
 	// We always replace all existing addresses with new ones read.
@@ -172,9 +166,7 @@ func main() {
 							log.Fatal(err)
 					}
 					lock2.Lock()
-					//s := strings.Replace(string(contents),"\n",":30303\n",-1)
-					newMirrorAddresses = nil
-					newMirrorAddresses = strings.Split(string(contents),"\n")
+					mirrorAddresses = strings.Split(string(contents),"\n")
 					lock2.Unlock()
 				} else {
 					log.Printf("May be seedurl: %s is not available at the moment", seedurl)
@@ -204,12 +196,6 @@ func main() {
 		log.Printf("accepted connection (%s <-> %s)", c.RemoteAddr(), c.LocalAddr())
 
 		go func(c net.Conn) {
-			cF, err := net.Dial("tcp", forwardAddress)
-			if err != nil {
-				log.Printf("error while connecting to forwarder: %s", err)
-				return
-			}
-			defer cF.Close()
 			defer c.Close()
 
 			buf := make([]byte, 0, 4096) // big buffer
@@ -252,10 +238,9 @@ func main() {
 			var mirrors []mirror
 			var localMirrorAddresses mirrorList			
 			lock2.RLock()
-			localMirrorAddresses = newMirrorAddresses[1:] // ignore first one since it is forwarder ip
+			localMirrorAddresses = make(mirrorList, len(mirrorAddresses))
+			copy(localMirrorAddresses, mirrorAddresses)
 			lock2.RUnlock()
-			
-
 			for _, addr := range localMirrorAddresses {
 				if addr == "" {
 					continue
