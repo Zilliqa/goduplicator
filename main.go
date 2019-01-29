@@ -110,14 +110,28 @@ func (l *mirrorList) Set(value string) error {
 	return nil
 }
 
+func reportDifference(new []string, old []string, oSet *set) (nSet *set) {
+	nSet = NewSet()
+	for _, n := range new {
+		nSet.Add(n)
+		if !oSet.Contains(n) {
+			log.Printf("mirror address added '%v'", n)	
+		}
+	}
+	for _, o := range old {
+		if !nSet.Contains(o) {
+			log.Printf("mirror address removed '%v'", o)
+		}
+	}
+	return
+}
+
 func main() {
 	var (
 		connectTimeout   time.Duration
 		delay            time.Duration
 		listenAddress    string
-		forwardAddress   string
-		mirrorAddresses  mirrorList
-		newMirrorAddresses mirrorList
+		mirrorAddresses mirrorList
 		useZeroCopy      bool
 		mirrorCloseDelay time.Duration
 		seedurl          string
@@ -125,16 +139,14 @@ func main() {
 
 	flag.BoolVar(&useZeroCopy, "z", false, "use zero copy")
 	flag.StringVar(&listenAddress, "l", "", "listen address (e.g. 'localhost:8080')")
-	flag.StringVar(&forwardAddress, "f", "", "forward to address (e.g. 'localhost:8081')")
-	flag.Var(&mirrorAddresses, "m", "comma separated list of mirror addresses (e.g. 'localhost:8082,localhost:8083')")
 	flag.DurationVar(&connectTimeout, "t", 500*time.Millisecond, "mirror connect timeout")
 	flag.DurationVar(&delay, "d", 1*time.Second, "delay connecting to mirror after unsuccessful attempt")
 	flag.DurationVar(&writeTimeout, "wt", 20*time.Millisecond, "mirror write timeout")
 	flag.DurationVar(&mirrorCloseDelay, "mt", 0, "mirror conn close delay")
-	flag.StringVar(&seedurl, "s", "", "seed url to check level2lookupips")
+	flag.StringVar(&seedurl, "s", "", "URL for downstream IP list text file (e.g. http://a.com/ip.txt")
 
 	flag.Parse()
-	if listenAddress == "" || forwardAddress == "" {
+	if listenAddress == "" {
 		flag.Usage()
 		return
 	}
@@ -144,7 +156,7 @@ func main() {
 		log.Fatalf("error while listening: %s", err)
 	}
 
-	fmt.Println(seedurl)
+	log.Println("URL is", seedurl)
 	if seedurl == "" {
 		flag.Usage()
 		return
@@ -154,12 +166,12 @@ func main() {
 	var lock2 sync.RWMutex
 	mirrorWake := make(map[string]time.Time)
 	hashStore = NewSet()
-	// No need to lock here since no one access them at this point.
-	newMirrorAddresses = append(newMirrorAddresses, mirrorAddresses...)
 
 	// routine that gets the latest updates of mirror address every 10 sec
 	// We always replace all existing addresses with new ones read.
 	go func() {
+		addressStore := NewSet()
+
 		for {
 			response, err := http.Get(seedurl)
 			if err != nil {
@@ -171,10 +183,11 @@ func main() {
 					if err != nil {
 							log.Fatal(err)
 					}
+					oldAddresses := mirrorAddresses
+					newAddresses := strings.Split(string(contents),"\n")
+					addressStore = reportDifference(newAddresses, oldAddresses, addressStore)
 					lock2.Lock()
-					//s := strings.Replace(string(contents),"\n",":30303\n",-1)
-					newMirrorAddresses = nil
-					newMirrorAddresses = strings.Split(string(contents),"\n")
+					mirrorAddresses = newAddresses
 					lock2.Unlock()
 				} else {
 					log.Printf("May be seedurl: %s is not available at the moment", seedurl)
@@ -201,15 +214,9 @@ func main() {
 			log.Fatalf("Error while accepting: %s", err)
 		}
 
-		log.Printf("accepted connection (%s <-> %s)", c.RemoteAddr(), c.LocalAddr())
+		log.Printf("accepted upstream connection (%s <-> %s)", c.RemoteAddr(), c.LocalAddr())
 
 		go func(c net.Conn) {
-			cF, err := net.Dial("tcp", forwardAddress)
-			if err != nil {
-				log.Printf("error while connecting to forwarder: %s", err)
-				return
-			}
-			defer cF.Close()
 			defer c.Close()
 
 			buf := make([]byte, 0, 4096) // big buffer
@@ -220,7 +227,7 @@ func main() {
 				n, err1 = c.Read(tmp)
 				if err1 != nil {
 					if err1 != io.EOF {
-						fmt.Println("read error:", err1)
+						log.Println("read error:", err1)
 						}
 					break
 				}
@@ -252,10 +259,10 @@ func main() {
 			var mirrors []mirror
 			var localMirrorAddresses mirrorList			
 			lock2.RLock()
-			localMirrorAddresses = newMirrorAddresses[1:] // ignore first one since it is forwarder ip
+			localMirrorAddresses = make(mirrorList, len(mirrorAddresses))
+			copy(localMirrorAddresses, mirrorAddresses)
 			lock2.RUnlock()
 			
-
 			for _, addr := range localMirrorAddresses {
 				if addr == "" {
 					continue
