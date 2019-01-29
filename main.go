@@ -126,6 +126,16 @@ func reportDifference(new []string, old []string, oSet *set) (nSet *set) {
 	return
 }
 
+func removeEmptyAddr(addresses []string) (newList []string) {
+	newList = addresses[:0]
+	for _, addr := range addresses {
+		if addr != "" {
+			newList = append(newList, addr)
+		}
+	}
+	return
+}
+
 func main() {
 	var (
 		connectTimeout   time.Duration
@@ -184,7 +194,7 @@ func main() {
 							log.Fatal(err)
 					}
 					oldAddresses := mirrorAddresses
-					newAddresses := strings.Split(string(contents),"\n")
+					newAddresses := removeEmptyAddr(strings.Split(string(contents),"\n"))
 					addressStore = reportDifference(newAddresses, oldAddresses, addressStore)
 					lock2.Lock()
 					mirrorAddresses = newAddresses
