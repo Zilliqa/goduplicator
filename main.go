@@ -61,6 +61,10 @@ func (s *set) Clear() {
 	s.m = make(map[string]struct{})
 }
 
+func (s *set) Deallocate() {
+	s.m = nil
+}
+
 var writeTimeout time.Duration
 var hashStore *set
 var lock3 sync.RWMutex
@@ -83,7 +87,7 @@ func forwardAndCopy(message []byte, from net.Conn, mirrors []mirror) {
 				mirrors[i].conn.Close()
 				atomic.StoreUint32(&mirrors[i].closed, 1)
 			}	
-			log.Printf("Sent %d bytes", c)
+			// log.Printf("Sent %d bytes", c)
 		}
 		start += c
     	if c == 0 || start >= len(message) {
@@ -195,7 +199,9 @@ func main() {
 					}
 					oldAddresses := mirrorAddresses
 					newAddresses := removeEmptyAddr(strings.Split(string(contents),"\n"))
+					oldAddressStore := addressStore
 					addressStore = reportDifference(newAddresses, oldAddresses, addressStore)
+					oldAddressStore.Deallocate()
 					lock2.Lock()
 					mirrorAddresses = newAddresses
 					lock2.Unlock()
@@ -247,7 +253,6 @@ func main() {
 			if(len(buf) <= 0){
 				return
 			}
-			log.Printf("len = %d", len(buf))
 		
 			// Get hash of message
 			hasher := md5.New()
@@ -263,7 +268,8 @@ func main() {
 			}
 			hashStore.Add(hash)
 			lock3.Unlock()
-		
+			
+			log.Printf("len = %d", len(buf))
 			log.Printf("Received broadcasted message with hash : %s", hash)
 			
 			var mirrors []mirror
