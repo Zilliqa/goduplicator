@@ -58,7 +58,7 @@ func (s *set) Contains(value string) bool {
 }
 
 func (s *set) Clear() {
-	s.m = make(map[string]struct{})
+	s.m = nil
 }
 
 var writeTimeout time.Duration
@@ -195,7 +195,9 @@ func main() {
 					}
 					oldAddresses := mirrorAddresses
 					newAddresses := removeEmptyAddr(strings.Split(string(contents),"\n"))
+					oldAddressStore := addressStore
 					addressStore = reportDifference(newAddresses, oldAddresses, addressStore)
+					oldAddressStore.Clear()
 					lock2.Lock()
 					mirrorAddresses = newAddresses
 					lock2.Unlock()
