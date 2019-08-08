@@ -163,6 +163,8 @@ func main() {
 		useZeroCopy      bool
 		mirrorCloseDelay time.Duration
 		seedurl          string
+		incrementConnectTimeout time.Duration
+		connectionRetryCount int
 	)
 
 	flag.BoolVar(&useZeroCopy, "z", false, "use zero copy")
@@ -172,7 +174,9 @@ func main() {
 	flag.DurationVar(&writeTimeout, "wt", 100*time.Millisecond, "mirror write timeout")
 	flag.DurationVar(&mirrorCloseDelay, "mt", 0, "mirror conn close delay")
 	flag.StringVar(&seedurl, "s", "", "URL for downstream IP list text file (e.g. http://a.com/ip.txt")
-
+	flag.IntVar(&connectionRetryCount, "rc", 3, "mirror conn retry count")
+	flag.DurationVar(&incrementConnectTimeout, "pt", 1*time.Second, "increment connect timeout by this duration for every retry")
+	
 	flag.Parse()
 	if listenAddress == "" {
 		flag.Usage()
@@ -333,13 +337,15 @@ func main() {
 			// retry for prev failures on getting mirror connections
 			for _, addr := range retryMirroraddresses {
 				var retryCounter int = 1
-				for retryCounter <= 3 {
-					cn, err := net.DialTimeout("tcp", addr, connectTimeout)
+				for retryCounter <= connectionRetryCount {
+					var progressiveConnTimeout = connectTimeout
+					cn, err := net.DialTimeout("tcp", addr, progressiveConnTimeout)
 					if err != nil {
 						log.Printf("[Retry %d ] error while retrying connecting to mirror %s: %s", retryCounter, addr, err)
 						if strings.Contains(err.Error(), "i/o timeout") {
 							retryCounter++
-							time.Sleep(1*time.Second)
+							time.Sleep(500*time.Millisecond)
+							progressiveConnTimeout += incrementConnectTimeout
 							continue
 						} else {// connection refused or other error
 							lock.Lock()
@@ -358,7 +364,7 @@ func main() {
 				}
 			}
 
-			if len(retrymirrors) > 0{
+			if len(retrymirrors) > 0 {
 				// write out message to mirrors
 				connect(buf, c, retrymirrors)
 
