@@ -312,7 +312,8 @@ func main() {
 				cn, err := net.DialTimeout("tcp", addr, connectTimeout)
 				if err != nil {
 					log.Printf("error while connecting to mirror %s: %s", addr, err)
-					if strings.Contains(err.Error(), "i/o timeout") {
+					//if strings.Contains(err.Error(), "i/o timeout") {
+					if strings.Contains(err.Error(), "connection refused") {
 						retryMirroraddresses = append(retryMirroraddresses, addr)
 					} else {// connection refused or other error
 						lock.Lock()
