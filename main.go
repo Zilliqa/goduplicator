@@ -169,7 +169,7 @@ func main() {
 
 	flag.BoolVar(&useZeroCopy, "z", false, "use zero copy")
 	flag.StringVar(&listenAddress, "l", "", "listen address (e.g. 'localhost:8080')")
-	flag.DurationVar(&connectTimeout, "t", 200*time.Millisecond, "mirror connect timeout")
+	flag.DurationVar(&connectTimeout, "t", 1*time.Second, "mirror connect timeout")
 	flag.DurationVar(&delay, "d", 1*time.Second, "delay connecting to mirror after unsuccessful attempt")
 	flag.DurationVar(&writeTimeout, "wt", 100*time.Millisecond, "mirror write timeout")
 	flag.DurationVar(&mirrorCloseDelay, "mt", 0, "mirror conn close delay")
@@ -370,7 +370,6 @@ func main() {
 
 				// close the mirror connection
 				closeConnections(mirrors, mirrorCloseDelay)
-					
 			}
 		}(c)
 	}
