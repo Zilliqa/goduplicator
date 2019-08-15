@@ -369,7 +369,7 @@ func main() {
 				connect(buf, c, retryMirrors)
 
 				// close the mirror connection
-				closeConnections(mirrors, mirrorCloseDelay)
+				closeConnections(retryMirrors, mirrorCloseDelay)
 			}
 		}(c)
 	}
