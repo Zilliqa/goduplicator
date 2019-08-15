@@ -290,14 +290,14 @@ func main() {
 			log.Printf("len = %d", len(buf))
 			log.Printf("Received broadcasted message with hash : %s", hash)
 			
-			var mirrors, retrymirrors []mirror
+			var mirrors, retryMirrors []mirror
 			var localMirrorAddresses mirrorList			
 			lock2.RLock()
 			localMirrorAddresses = make(mirrorList, len(mirrorAddresses))
 			copy(localMirrorAddresses, mirrorAddresses)
 			lock2.RUnlock()
 			
-			var retryMirroraddresses  []string
+			var retryMirrorAddresses  []string
 			for _, addr := range localMirrorAddresses {
 				if addr == "" {
 					continue
@@ -313,7 +313,7 @@ func main() {
 				if err != nil {
 					log.Printf("error while connecting to mirror %s: %s", addr, err)
 					if strings.Contains(err.Error(), "i/o timeout") {
-						retryMirroraddresses = append(retryMirroraddresses, addr)
+						retryMirrorAddresses = append(retryMirrorAddresses, addr)
 					} else {// connection refused or other error
 						lock.Lock()
 						mirrorWake[addr] = time.Now().Add(delay)
@@ -335,7 +335,7 @@ func main() {
 			closeConnections(mirrors, mirrorCloseDelay)
 			
 			// retry for prev failures on getting mirror connections
-			for _, addr := range retryMirroraddresses {
+			for _, addr := range retryMirrorAddresses {
 				var retryCounter int = 1
 				var progressiveConnTimeout = connectTimeout
 				for retryCounter <= connectionRetryCount {
@@ -354,7 +354,7 @@ func main() {
 							break
 						}
 					} else {
-						retrymirrors = append(retrymirrors, mirror{
+						retryMirrors = append(retryMirrors, mirror{
 							addr:   addr,
 							conn:   cn,
 							closed: 0,
@@ -364,9 +364,9 @@ func main() {
 				}
 			}
 
-			if len(retrymirrors) > 0 {
+			if len(retryMirrors) > 0 {
 				// write out message to mirrors
-				connect(buf, c, retrymirrors)
+				connect(buf, c, retryMirrors)
 
 				// close the mirror connection
 				closeConnections(mirrors, mirrorCloseDelay)
