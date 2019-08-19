@@ -101,6 +101,20 @@ func connect(message []byte, origin net.Conn, mirrors []mirror) {
 		forwardAndCopy(message, origin, mirrors)
 }
 
+func closeConnections(mirrors []mirror, mirrorCloseDelay time.Duration) {
+	for _, m := range mirrors {
+		go func(m mirror) {
+			if mirrorCloseDelay > 0 {
+				go func() {
+					io.Copy(ioutil.Discard, m.conn)
+				}()
+				time.Sleep(mirrorCloseDelay)
+			}
+			m.conn.Close()
+		}(m)
+	}
+}
+
 type mirrorList []string
 
 func (l *mirrorList) String() string {
@@ -149,16 +163,20 @@ func main() {
 		useZeroCopy      bool
 		mirrorCloseDelay time.Duration
 		seedurl          string
+		incrementConnectTimeout time.Duration
+		connectionRetryCount int
 	)
 
 	flag.BoolVar(&useZeroCopy, "z", false, "use zero copy")
 	flag.StringVar(&listenAddress, "l", "", "listen address (e.g. 'localhost:8080')")
-	flag.DurationVar(&connectTimeout, "t", 500*time.Millisecond, "mirror connect timeout")
+	flag.DurationVar(&connectTimeout, "t", 1*time.Second, "mirror connect timeout")
 	flag.DurationVar(&delay, "d", 1*time.Second, "delay connecting to mirror after unsuccessful attempt")
-	flag.DurationVar(&writeTimeout, "wt", 20*time.Millisecond, "mirror write timeout")
+	flag.DurationVar(&writeTimeout, "wt", 100*time.Millisecond, "mirror write timeout")
 	flag.DurationVar(&mirrorCloseDelay, "mt", 0, "mirror conn close delay")
 	flag.StringVar(&seedurl, "s", "", "URL for downstream IP list text file (e.g. http://a.com/ip.txt")
-
+	flag.IntVar(&connectionRetryCount, "rc", 3, "mirror conn retry count")
+	flag.DurationVar(&incrementConnectTimeout, "pt", 1*time.Second, "increment connect timeout by this duration for every retry")
+	
 	flag.Parse()
 	if listenAddress == "" {
 		flag.Usage()
@@ -272,13 +290,14 @@ func main() {
 			log.Printf("len = %d", len(buf))
 			log.Printf("Received broadcasted message with hash : %s", hash)
 			
-			var mirrors []mirror
+			var mirrors, retryMirrors []mirror
 			var localMirrorAddresses mirrorList			
 			lock2.RLock()
 			localMirrorAddresses = make(mirrorList, len(mirrorAddresses))
 			copy(localMirrorAddresses, mirrorAddresses)
 			lock2.RUnlock()
 			
+			var retryMirrorAddresses  []string
 			for _, addr := range localMirrorAddresses {
 				if addr == "" {
 					continue
@@ -293,9 +312,13 @@ func main() {
 				cn, err := net.DialTimeout("tcp", addr, connectTimeout)
 				if err != nil {
 					log.Printf("error while connecting to mirror %s: %s", addr, err)
-					lock.Lock()
-					mirrorWake[addr] = time.Now().Add(delay)
-					lock.Unlock()
+					if strings.Contains(err.Error(), "i/o timeout") {
+						retryMirrorAddresses = append(retryMirrorAddresses, addr)
+					} else {// connection refused or other error
+						lock.Lock()
+						mirrorWake[addr] = time.Now().Add(delay)
+						lock.Unlock()
+					}
 				} else {
 					mirrors = append(mirrors, mirror{
 						addr:   addr,
@@ -305,18 +328,48 @@ func main() {
 				}
 			}
 
+			// write out message to mirrors
 			connect(buf, c, mirrors)
 
-			for _, m := range mirrors {
-				go func(m mirror) {
-					if mirrorCloseDelay > 0 {
-						go func() {
-							io.Copy(ioutil.Discard, m.conn)
-						}()
-						time.Sleep(mirrorCloseDelay)
+			// close the mirror connection
+			closeConnections(mirrors, mirrorCloseDelay)
+			
+			// retry for prev failures on getting mirror connections
+			for _, addr := range retryMirrorAddresses {
+				var retryCounter int = 1
+				var progressiveConnTimeout = connectTimeout
+				for retryCounter <= connectionRetryCount {
+					cn, err := net.DialTimeout("tcp", addr, progressiveConnTimeout)
+					if err != nil {
+						log.Printf("[Retry %d ] error while retrying connecting to mirror %s: %s", retryCounter, addr, err)
+						if strings.Contains(err.Error(), "i/o timeout") {
+							retryCounter++
+							time.Sleep(500*time.Millisecond)
+							progressiveConnTimeout += incrementConnectTimeout
+							continue
+						} else {// connection refused or other error
+							lock.Lock()
+							mirrorWake[addr] = time.Now().Add(delay)
+							lock.Unlock()
+							break
+						}
+					} else {
+						retryMirrors = append(retryMirrors, mirror{
+							addr:   addr,
+							conn:   cn,
+							closed: 0,
+						})
+						break
 					}
-					m.conn.Close()
-				}(m)
+				}
+			}
+
+			if len(retryMirrors) > 0 {
+				// write out message to mirrors
+				connect(buf, c, retryMirrors)
+
+				// close the mirror connection
+				closeConnections(retryMirrors, mirrorCloseDelay)
 			}
 		}(c)
 	}
