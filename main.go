@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/md5"
 	"encoding/hex"
 	"flag"
@@ -18,12 +19,12 @@ import (
 
 const (
 	defaultBufferSize = 1024
-	SPLICE_F_MOVE     = 1
-	SPLICE_F_NONBLOCK = 2
-	SPLICE_F_MORE     = 4
-	SPLICE_F_GIFT     = 8
-	MaxUint           = ^uint(0)
-	MaxInt            = int(MaxUint >> 1)
+	//SPLICE_F_MOVE     = 1
+	//SPLICE_F_NONBLOCK = 2
+	//SPLICE_F_MORE     = 4
+	//SPLICE_F_GIFT     = 8
+	//MaxUint           = ^uint(0)
+	//MaxInt            = int(MaxUint >> 1)
 )
 
 type mirror struct {
@@ -145,11 +146,54 @@ func reportDifference(new []string, old []string, oSet *set) (nSet *set) {
 	return
 }
 
-func removeEmptyAddr(addresses []string) (newList []string) {
-	newList = addresses[:0]
-	for _, addr := range addresses {
-		if addr != "" {
+func isIPv4(addr string) bool {
+	trial := net.ParseIP(addr)
+	if trial.To4() == nil {
+		return false
+	} else {
+		return true
+	}
+}
+
+func lookupAddresses(host string) (addrs []string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		log.Printf("fail to lookup host: %v (%v)", host, err.Error())
+		return
+	}
+	for _, ip := range ips {
+		if ip.IP.To4() != nil {
+			log.Printf("resolved ip %v from %v", ip.String(), host)
+			addrs = append(addrs, ip.String())
+		}
+	}
+	return
+}
+
+func getAddressList(contents string) (newList []string) {
+	lines := strings.Split(contents, "\n")
+	newList = []string{}
+	for _, addr := range lines {
+		addr = strings.TrimSpace(addr)
+		// line starts with '#' is a comment
+		if addr == "" || strings.HasPrefix(addr, "#") {
+			continue
+		}
+
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			log.Printf("invalid address %v, skip", err.Error())
+			continue
+		}
+		if isIPv4(host) {
 			newList = append(newList, addr)
+		} else {
+			fmt.Printf("%v is not an IPv4 address, try to resolve by DNS", host)
+			for _, ip := range lookupAddresses(host) {
+				newList = append(newList, fmt.Sprintf("%v:%v", ip, port))
+			}
 		}
 	}
 	return
@@ -195,8 +239,8 @@ func main() {
 		return
 	}
 
-	var lock sync.RWMutex
-	var lock2 sync.RWMutex
+	var mirrorWakeLock sync.RWMutex
+	var mirrorAddressesLock sync.RWMutex
 	mirrorWake := make(map[string]time.Time)
 	hashStore = NewSet()
 
@@ -218,13 +262,13 @@ func main() {
 							log.Fatal(err)
 						}
 						oldAddresses := mirrorAddresses
-						newAddresses := removeEmptyAddr(strings.Split(string(contents), "\n"))
+						newAddresses := getAddressList(string(contents))
 						oldAddressStore := addressStore
 						addressStore = reportDifference(newAddresses, oldAddresses, addressStore)
 						oldAddressStore.Deallocate()
-						lock2.Lock()
+						mirrorAddressesLock.Lock()
 						mirrorAddresses = newAddresses
-						lock2.Unlock()
+						mirrorAddressesLock.Unlock()
 					} else {
 						log.Printf("May be seedurl: %s is not available at the moment", seedurl)
 					}
@@ -271,7 +315,7 @@ func main() {
 				buf = append(buf, tmp[:n]...)
 			}
 
-			if (len(buf) <= 0) {
+			if len(buf) <= 0 {
 				return
 			}
 
@@ -295,19 +339,19 @@ func main() {
 
 			var mirrors, retryMirrors []mirror
 			var localMirrorAddresses mirrorList
-			lock2.RLock()
+			mirrorAddressesLock.RLock()
 			localMirrorAddresses = make(mirrorList, len(mirrorAddresses))
 			copy(localMirrorAddresses, mirrorAddresses)
-			lock2.RUnlock()
+			mirrorAddressesLock.RUnlock()
 
 			var retryMirrorAddresses []string
 			for _, addr := range localMirrorAddresses {
 				if addr == "" {
 					continue
 				}
-				lock.RLock()
+				mirrorWakeLock.RLock()
 				wake := mirrorWake[addr]
-				lock.RUnlock()
+				mirrorWakeLock.RUnlock()
 				if wake.After(time.Now()) {
 					continue
 				}
@@ -318,9 +362,9 @@ func main() {
 					if strings.Contains(err.Error(), "i/o timeout") {
 						retryMirrorAddresses = append(retryMirrorAddresses, addr)
 					} else { // connection refused or other error
-						lock.Lock()
+						mirrorWakeLock.Lock()
 						mirrorWake[addr] = time.Now().Add(delay)
-						lock.Unlock()
+						mirrorWakeLock.Unlock()
 					}
 				} else {
 					mirrors = append(mirrors, mirror{
@@ -339,7 +383,7 @@ func main() {
 
 			// retry for prev failures on getting mirror connections
 			for _, addr := range retryMirrorAddresses {
-				var retryCounter int = 1
+				var retryCounter = 1
 				var progressiveConnTimeout = connectTimeout
 				for retryCounter <= connectionRetryCount {
 					cn, err := net.DialTimeout("tcp", addr, progressiveConnTimeout)
@@ -351,9 +395,9 @@ func main() {
 							progressiveConnTimeout += incrementConnectTimeout
 							continue
 						} else { // connection refused or other error
-							lock.Lock()
+							mirrorWakeLock.Lock()
 							mirrorWake[addr] = time.Now().Add(delay)
-							lock.Unlock()
+							mirrorWakeLock.Unlock()
 							break
 						}
 					} else {
