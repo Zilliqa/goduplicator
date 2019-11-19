@@ -165,7 +165,7 @@ func lookupAddresses(host string) (addrs []string) {
 	}
 	for _, ip := range ips {
 		if ip.IP.To4() != nil {
-			log.Printf("resolved ip %v from %v", ip.String(), host)
+			//log.Printf("resolved ip %v from %v", ip.String(), host)
 			addrs = append(addrs, ip.String())
 		}
 	}
@@ -190,7 +190,7 @@ func getAddressList(contents string) (newList []string) {
 		if isIPv4(host) {
 			newList = append(newList, addr)
 		} else {
-			fmt.Printf("%v is not an IPv4 address, try to resolve by DNS", host)
+			fmt.Printf("%v is not an IPv4 address, try to resolve by DNS\n", host)
 			for _, ip := range lookupAddresses(host) {
 				newList = append(newList, fmt.Sprintf("%v:%v", ip, port))
 			}

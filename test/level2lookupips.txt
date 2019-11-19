@@ -5,3 +5,5 @@
 192.4.2.1:3030
 192.5.2.1:3030
 192.6.2.1:3030
+# dns name that resolves to multiple IPv4
+seed.bitnodes.io:3030
