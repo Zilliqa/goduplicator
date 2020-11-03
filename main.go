@@ -38,19 +38,20 @@ var (
 	connectTimeout          time.Duration
 	delay                   time.Duration
 	listenAddress           string
-	useZeroCopy             bool
 	mirrorCloseDelay        time.Duration
 	downstreamURL           string
 	incrementConnectTimeout time.Duration
 	writeTimeout            time.Duration
 	connectionRetryCount    int
 	metricServerAddr        string
+	logLevel                string
 )
 
 // stores
-var hashStore *lru.Cache
-var mirrorWakeLock sync.RWMutex
-var mirrorWake = make(map[string]time.Time)
+var msgHashStore *lru.Cache
+
+//var mirrorWakeLock sync.RWMutex
+var mirrorWake = sync.Map{}
 var mirrorAddressesLock sync.RWMutex
 var mirrorAddresses mirrorList
 
@@ -63,10 +64,19 @@ var (
 		Name: "multiplier_message_ignored_count",
 		Help: "How many duplicated message ignored",
 	})
-	mirrorsConnCount = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "multiplier_mirrors_connection_count",
+	msgIgnoredSize = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "multiplier_message_ignored_size",
+		Help: "Size sum of duplicated message ignored",
+	})
+	mirrorConnCount = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "multiplier_mirror_connection_count",
 		Help: "count of connection to mirror",
 	}, []string{"status", "addr"})
+	mirrorConnLatencyMs = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "multiplier_mirror_connection_latency_ms",
+		Help:    "latency of connection to mirror in milliseconds",
+		Buckets: []float64{1, 5, 50, 150},
+	}, []string{"addr"})
 	bytesReceived = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "multiplier_bytes_received",
 		Help: "count of bytes of message received",
@@ -79,7 +89,25 @@ var (
 		Name: "multiplier_sent_error_count",
 		Help: "count of errors while sending messages",
 	}, []string{"addr"})
+	msgHashStoreSize = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "multiplier_message_hash_store_size",
+		Help: "size of lru message hash store",
+	})
 )
+
+func init() {
+	prometheus.MustRegister(
+		processedMsgCount,
+		msgIgnoredSize,
+		mirrorConnCount,
+		mirrorConnLatencyMs,
+		bytesReceived,
+		bytesSent,
+		msgIgnoredCount,
+		sentErrorCount,
+		msgHashStoreSize,
+	)
+}
 
 func forwardAndCopy(message []byte, mirrors []mirror) {
 	wg := sync.WaitGroup{}
@@ -136,12 +164,19 @@ func reportDifference(new []string, old []string, oSet mapset.Set) (nSet mapset.
 		if !oSet.Contains(n) {
 			log.Infof("mirror address added '%v'", n)
 			bytesSent.WithLabelValues(n).Add(0)
+			//sentErrorCount.WithLabelValues(n).Add(0)
+			//mirrorsConnCount.WithLabelValues("success", n).Add(0)
+			//mirrorsConnCount.WithLabelValues("fail", n).Add(0)
 		}
 	}
 	for _, o := range old {
 		if !nSet.Contains(o) {
 			log.Infof("mirror address removed '%v'", o)
 			bytesSent.DeleteLabelValues(o)
+			sentErrorCount.DeleteLabelValues(o)
+			mirrorConnLatencyMs.DeleteLabelValues(o)
+			mirrorConnCount.DeleteLabelValues("success", o)
+			mirrorConnCount.DeleteLabelValues("fail", o)
 		}
 	}
 	return
@@ -187,23 +222,14 @@ func fetchDownstreams() {
 }
 
 func RunMetricServer(addr string) {
-	log.Infof("running pprof & metrics server at: %s", addr)
-	prometheus.MustRegister(
-		processedMsgCount,
-		mirrorsConnCount,
-		bytesReceived,
-		bytesSent,
-		msgIgnoredCount,
-		sentErrorCount,
-	)
+	log.Infof("running pprof and metrics server at: %s", addr)
 	http.Handle("/metrics", promhttp.Handler())
 	err := http.ListenAndServe(addr, nil)
 	log.Error(err)
 }
 
 func main() {
-	flag.BoolVar(&printVer, "v", false, "print version info")
-	flag.BoolVar(&useZeroCopy, "z", false, "use zero copy")
+	flag.BoolVar(&printVer, "V", false, "print version info")
 	flag.StringVar(&listenAddress, "l", "", "listen address (e.g. 'localhost:8080')")
 	flag.StringVar(&metricServerAddr, "metrics-addr", ":9090", "pprof & metrics server listen address (e.g. ':9090')")
 	flag.DurationVar(&connectTimeout, "t", 1*time.Second, "mirror connect timeout")
@@ -213,8 +239,15 @@ func main() {
 	flag.StringVar(&downstreamURL, "s", "", "URL for downstream IP list text file (e.g. http://a.com/ip.txt")
 	flag.IntVar(&connectionRetryCount, "rc", 3, "mirror conn retry count")
 	flag.DurationVar(&incrementConnectTimeout, "pt", 1*time.Second, "increment connect timeout by this duration for every retry")
-
+	flag.StringVar(&logLevel, "log-level", "info", "level of logging (panic, fatal, error, warning, info, debug, trace)")
 	flag.Parse()
+
+	level, err := log.ParseLevel(logLevel)
+	if err != nil {
+		log.Error("unknown level")
+		level = log.InfoLevel
+	}
+	log.SetLevel(level)
 
 	if printVer {
 		printVersion()
@@ -226,20 +259,20 @@ func main() {
 		return
 	}
 
-	log.Infof("listening for upstream at %s", listenAddress)
+	log.Infof("Listening for upstream at %s", listenAddress)
 	l, err := net.Listen("tcp", listenAddress)
 	if err != nil {
-		log.Fatalf("error while listening: %s", err)
+		log.Fatalf("Error while listening: %s", err)
 	}
 
-	log.Infof("Downstream URL is", downstreamURL)
+	log.Infof("Downstream URL is %s", downstreamURL)
 	if downstreamURL == "" {
 		flag.Usage()
 		return
 	}
 
 	// with max size of 2048
-	hashStore, _ = lru.New(2048)
+	msgHashStore, _ = lru.New(2048)
 
 	// routine that gets the latest updates of mirror address every 10 sec
 	// We always replace all existing addresses with new ones read.
@@ -282,12 +315,14 @@ func main() {
 			// Get hash of message
 			hash := crc32.ChecksumIEEE(msg)
 			// Check if hash already existed in hashstore.
-			if hashStore.Contains(hash) {
+			if msgHashStore.Contains(hash) {
 				log.Infof("Ignoring duplicate broadcast message - len: %d, hash: %X", len(msg), hash)
 				msgIgnoredCount.Inc()
+				msgIgnoredSize.Add(float64(len(msg)))
 				return
 			}
-			hashStore.Add(hash, None)
+			msgHashStore.Add(hash, None)
+			msgHashStoreSize.Set(float64(msgHashStore.Len()))
 
 			log.Infof("Received broadcast message with len: %d, hash: %X", len(msg), hash)
 
@@ -303,26 +338,24 @@ func main() {
 				if addr == "" {
 					continue
 				}
-				mirrorWakeLock.RLock()
-				wake := mirrorWake[addr]
-				mirrorWakeLock.RUnlock()
-				if wake.After(time.Now()) {
+				wake, ok := mirrorWake.Load(addr)
+				if ok && wake.(time.Time).After(time.Now()) {
 					continue
 				}
-
+				start := time.Now()
 				cn, err := net.DialTimeout("tcp", addr, connectTimeout)
 				if err != nil {
-					log.Errorf("error while connecting to mirror %s: %s", addr, err)
-					mirrorsConnCount.WithLabelValues("fail", addr).Inc()
+					log.Errorf("error while connecting to %s: %s", addr, err)
+					mirrorConnCount.WithLabelValues("fail", addr).Inc()
 					if strings.Contains(err.Error(), "i/o timeout") {
 						retryMirrorAddresses = append(retryMirrorAddresses, addr)
 					} else { // connection refused or other error
-						mirrorWakeLock.Lock()
-						mirrorWake[addr] = time.Now().Add(delay)
-						mirrorWakeLock.Unlock()
+						mirrorWake.Store(addr, time.Now().Add(delay))
 					}
 				} else {
-					mirrorsConnCount.WithLabelValues("success", addr).Inc()
+					mirrorWake.Delete(addr)
+					mirrorConnCount.WithLabelValues("success", addr).Inc()
+					mirrorConnLatencyMs.WithLabelValues(addr).Observe(float64(time.Now().Sub(start).Milliseconds()))
 					mirrors = append(mirrors, mirror{
 						addr:   addr,
 						conn:   cn,
@@ -331,31 +364,38 @@ func main() {
 				}
 			}
 
+			if len(mirrors) <= 0 {
+				log.Error("empty mirrors list, all mirrors unavailable")
+			}
 			// write out message to mirrors
 			forwardAndCopy(msg, mirrors)
 			// close the mirror connection
 			closeConnections(mirrors, mirrorCloseDelay)
 
+			log.Infof("len(retryMirrorAddresses)=%d", len(retryMirrorAddresses))
 			// retry for prev failures on getting mirror connections
 			for _, addr := range retryMirrorAddresses {
-				var retryCounter int = 1
+				var start time.Time
+				var retryCounter = 1
 				var progressiveConnTimeout = connectTimeout
 				for retryCounter <= connectionRetryCount {
+					start = time.Now()
 					cn, err := net.DialTimeout("tcp", addr, progressiveConnTimeout)
 					if err != nil {
-						log.Errorf("[Retry %d ] error while retrying connecting to mirror %s: %s", retryCounter, addr, err)
+						log.Errorf("[Retry %d ] error while retrying connecting with timeout %s to %s: %s", retryCounter, progressiveConnTimeout.String(), addr, err)
 						if strings.Contains(err.Error(), "i/o timeout") {
 							retryCounter++
 							time.Sleep(500 * time.Millisecond)
 							progressiveConnTimeout += incrementConnectTimeout
 							continue
 						} else { // connection refused or other error
-							mirrorWakeLock.Lock()
-							mirrorWake[addr] = time.Now().Add(delay)
-							mirrorWakeLock.Unlock()
+							mirrorWake.Store(addr, time.Now().Add(delay))
 							break
 						}
 					} else {
+						mirrorWake.Delete(addr)
+						mirrorConnCount.WithLabelValues("success", addr).Inc()
+						mirrorConnLatencyMs.WithLabelValues(addr).Observe(float64(time.Now().Sub(start).Milliseconds()))
 						retryMirrors = append(retryMirrors, mirror{
 							addr:   addr,
 							conn:   cn,
