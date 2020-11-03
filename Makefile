@@ -55,11 +55,11 @@ benchmark: local
 
 linux-amd64:
 	mkdir -p ${DIST}
-	GO111MODULE="on" GOOS=linux GOARCH=amd64 go build ${BUILD_FLAGS} -o ${DIST}/${BIN_NAME}-linux-amd64 ${MODULE_NAME}
+	GO111MODULE="on" GOOS=linux GOARCH=amd64 go build ${BUILD_FLAGS} -o ${DIST}/${BIN_NAME}-Linux-amd64 ${MODULE_NAME}
 
 darwin-amd64:
 	mkdir -p ${DIST}
-	GO111MODULE="on" GOOS=darwin GOARCH=amd64 go build ${BUILD_FLAGS} -o ${DIST}/${BIN_NAME}-darwin-amd64 ${MODULE_NAME}
+	GO111MODULE="on" GOOS=darwin GOARCH=amd64 go build ${BUILD_FLAGS} -o ${DIST}/${BIN_NAME}-Darwin-amd64 ${MODULE_NAME}
 
 
 release: clean linux-amd64 darwin-amd64
