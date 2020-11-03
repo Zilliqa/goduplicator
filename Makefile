@@ -50,6 +50,9 @@ local:
 	mkdir -p ${DIST}
 	GO111MODULE="on" go build ${BUILD_FLAGS} -o ${DIST}/${BIN_NAME} ${MODULE_NAME}
 
+benchmark: local
+	GO111MODULE="on" go run ${MODULE_NAME}/test/benchmark -p ${DIST}/${BIN_NAME}
+
 linux-amd64:
 	mkdir -p ${DIST}
 	GO111MODULE="on" GOOS=linux GOARCH=amd64 go build ${BUILD_FLAGS} -o ${DIST}/${BIN_NAME}-linux-amd64 ${MODULE_NAME}

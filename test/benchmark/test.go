@@ -204,7 +204,7 @@ func sendMsg(addr string, size, count int, totalRecv *int64, closeCh chan struct
 }
 
 func main() {
-	log.SetReportCaller(true)
+	//log.SetReportCaller(true)
 	flag.StringVar(&dupPath, "p", "", "path of duplicator executable")
 	flag.UintVar(&seedCount, "c", 3, "count of downstream seeds")
 	flag.UintVar(&msgLen, "l", 4096, "length of testing message")
@@ -241,17 +241,17 @@ func main() {
 		go processSeed(s, &totalRecv, seedWg)
 	}
 	start := time.Now()
-	fmt.Printf("sending %d x %d bytes msg to %s\n", msgCount, msgLen, pAddr)
+	log.Infof("sending %d x %d bytes msg to %s\n", msgCount, msgLen, pAddr)
 	go sendMsg(pAddr, int(msgLen), int(msgCount), &totalSent, closeCh)
 
 	var lastSent int64
 	var lastRecv int64
 
-	var interval uint64 = 3
+	var interval uint64 = 2
 	tick := time.Tick(time.Duration(interval) * time.Second)
 Loop:
 	for t := range tick {
-		fmt.Printf("%s sent: %s %s/s    recv: %s %s/s\n", t.Format(time.RFC3339),
+		log.Infof("%s sent: %s %s/s    recv: %s %s/s\n", t.Format(time.RFC3339),
 			humanize.Bytes(uint64(totalSent)), humanize.Bytes(uint64(totalSent-lastSent)/interval),
 			humanize.Bytes(uint64(totalRecv)), humanize.Bytes(uint64(totalRecv-lastRecv)/interval),
 		)
@@ -271,11 +271,11 @@ Loop:
 		}
 	}
 
-	fmt.Printf("total sent: %d, recv: %d, recv/sent: %f\n",
+	log.Infof("total sent: %d, recv: %d, recv/sent: %f\n",
 		totalSent, totalRecv, float64(totalRecv)/float64(totalSent),
 	)
 	cost := time.Now().Sub(start).Seconds()
-	fmt.Printf("avg speed: send: %s/s, recv: %s/s\n",
+	log.Infof("avg speed: send: %s/s, recv: %s/s\n",
 		humanize.Bytes(uint64(float64(totalSent)/cost)),
 		humanize.Bytes(uint64(float64(totalRecv)/cost)),
 	)
